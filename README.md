@@ -20,6 +20,7 @@ If you reach for `.md` files as your primary documentation format, this extensio
 ## Features
 
 - **Focused Documentation View**: Shows only markdown files and directories containing markdown files, with animated progress messaging during the initial workspace scan
+- **Switchable Browse Modes**: Choose `tree` mode to mirror your workspace folders, or `category` mode to regroup markdown files by detected document type (README, changelog, docs, tutorials, specs, tests, notes, todo, and other markdown)
 - **H1 Label Display**: Files with a top-level heading (`#`) display that heading as the tree label, with the filename as the description
 - **Preview on Click**: Single-click on any markdown file to open VS Code's native markdown preview
 - **Open Preview in New Tab**: Right-click any file in the Markdown Files or Favorites tree to open a second locked preview panel without replacing the current one
@@ -37,17 +38,19 @@ If you reach for `.md` files as your primary documentation format, this extensio
 ## Usage
 
 1. Click on the Markdown Compass icon in the activity bar (sidebar)
-2. Browse through the "Markdown Files" tree to find markdown files
-3. Click once on a markdown file to open it in VS Code's native markdown preview
-4. The "Current Document" panel will automatically display the header structure of the previewed file
-5. Click on any header in the headers view to target that section in the markdown preview
-6. Right-click on any header to copy a markdown link to it for cross-referencing
-7. Right-click any file in the Markdown Files or Favorites tree and choose **Open Preview in New Tab** to open an additional locked preview alongside the current one
-8. Use the **Search** or **Filter in Sidebar** toolbar buttons to filter the tree by folder name, markdown file name, or markdown header text — both buttons expose the same fuzzy filter
-9. Use the refresh button to update the view if files are added or changed
-10. Click on the filter icon to toggle .gitignore filtering on/off
-11. Use the statistics button to view comprehensive information about your markdown files
-12. Right-click any file and choose **Add to Favorites** to pin it in the Favorites panel; use **Remove from Favorites** to unpin it
+2. Browse through the "Markdown Files" view to find markdown files
+3. Use the browse-mode toolbar button (**Toggle Browse Mode**) to switch between `tree` and `category`
+4. (Optional) Set `markdownCompass.browseMode` to `tree` or `category` in settings to keep your preferred default
+5. Click once on a markdown file to open it in VS Code's native markdown preview
+6. The "Current Document" panel will automatically display the header structure of the previewed file
+7. Click on any header in the headers view to target that section in the markdown preview
+8. Right-click on any header to copy a markdown link to it for cross-referencing
+9. Right-click any file in the Markdown Files or Favorites tree and choose **Open Preview in New Tab** to open an additional locked preview alongside the current one
+10. Use the **Search** or **Filter in Sidebar** toolbar buttons to filter the tree by folder name, markdown file name, or markdown header text — both buttons expose the same fuzzy filter
+11. Use the refresh button to update the view if files are added or changed
+12. Click on the filter icon to toggle .gitignore filtering on/off
+13. Use the statistics button to view comprehensive information about your markdown files
+14. Right-click any file and choose **Add to Favorites** to pin it in the Favorites panel; use **Remove from Favorites** to unpin it
 
 ## Search Scope
 
@@ -77,8 +80,11 @@ No special requirements or dependencies. Markdown Compass uses VS Code's built-i
 
 ## Extension Settings
 
-Markdown Compass contributes one native-preview safety setting:
+Markdown Compass contributes these settings:
 
+- `markdownCompass.browseMode` (default: `tree`) chooses the **Markdown Files** layout.
+	- `tree`: mirrors workspace folders and markdown file locations.
+	- `category`: groups markdown files by detected type (README, changelog, docs, tutorials, specs, tests, notes, todo, other).
 - `markdownCompass.safeLinkSuppression.enabled` (default: `true`) renders definitively broken local Markdown file links and broken cross-file Markdown heading fragments as inert styled text in VS Code's native Markdown preview.
 
 Anchor-only links, valid local links, external URLs, and local non-Markdown fragments that cannot be validated are left unchanged.

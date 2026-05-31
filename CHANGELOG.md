@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Category Browse Mode**: Added a new `markdownCompass.browseMode` setting and a toolbar toggle so the Markdown Files view can switch between the existing workspace tree and category-grouped browsing.
+
+### Changed
+- **Categorized Markdown Discovery**: Reused the existing document-type heuristics to group files into buckets such as README, changelog, tests, notes, todo, and other markdown while preserving preview, favorites, and header navigation behavior.
+
 ## [1.7.1] - 2026-05-26
 
 ### Changed

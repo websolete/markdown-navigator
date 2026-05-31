@@ -9,6 +9,7 @@ const EXTENSION_LOOKUP_IDS = [
 ];
 const releaseGateCommands = [
     'markdown-compass.refresh',
+    'markdown-compass.toggleBrowseMode',
     'markdown-compass.refreshHeaders',
     'markdown-compass.previewMarkdownFile',
     'markdown-compass.previewMarkdownFileInNewTab',

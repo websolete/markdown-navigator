@@ -1,8 +1,8 @@
 {
     "name": "markdown-compass",
     "displayName": "Markdown Compass",
-    "description": "Navigate and preview all Markdown files in your workspace from a structured sidebar with header navigation, favorites, and broken-link suppression",
-    "version": "1.7.1",
+    "description": "Navigate and preview Markdown files from a structured sidebar with tree or category browsing, header navigation, favorites, and broken-link suppression",
+    "version": "1.7.2",
     "publisher": "EdgeInformation",
     "author": {
         "name": "Kevin Miller"
@@ -116,24 +116,29 @@
                     "group": "navigation"
                 },
                 {
-                    "command": "markdownCompass.toggleGitIgnore",
-                    "when": "view == markdownCompass",
-                    "group": "navigation"
-                },
-                {
-                    "command": "markdown-compass.searchInSidebar",
+                    "command": "markdown-compass.toggleBrowseMode",
                     "when": "view == markdownCompass",
                     "group": "navigation@1"
                 },
                 {
+                    "command": "markdownCompass.toggleGitIgnore",
+                    "when": "view == markdownCompass",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "markdown-compass.searchInSidebar",
+                    "when": "view == markdownCompass",
+                    "group": "navigation@3"
+                },
+                {
                     "command": "markdown-compass.clearSearch",
                     "when": "view == markdownCompass && markdown-compass:isSearchActive",
-                    "group": "navigation@2"
+                    "group": "navigation@4"
                 },
                 {
                     "command": "markdown-compass.searchMarkdownFiles",
                     "when": "view == markdownCompass",
-                    "group": "navigation@3"
+                    "group": "navigation@5"
                 },
                 {
                     "command": "markdown-compass.refreshHeaders",
@@ -143,7 +148,7 @@
                 {
                     "command": "markdown-compass.showWorkspaceStats",
                     "when": "view == markdownCompass",
-                    "group": "navigation@4"
+                    "group": "navigation@6"
                 }
             ]
         },
@@ -152,6 +157,11 @@
                 "command": "markdown-compass.refresh",
                 "title": "Refresh",
                 "icon": "$(refresh)"
+            },
+            {
+                "command": "markdown-compass.toggleBrowseMode",
+                "title": "Toggle Browse Mode",
+                "icon": "$(organization)"
             },
             {
                 "command": "markdownCompass.toggleGitIgnore",
@@ -225,6 +235,20 @@
         "configuration": {
             "title": "Markdown Compass",
             "properties": {
+                "markdownCompass.browseMode": {
+                    "type": "string",
+                    "default": "tree",
+                    "enum": [
+                        "tree",
+                        "category"
+                    ],
+                    "enumDescriptions": [
+                        "Browse Markdown files in the current workspace-folder tree.",
+                        "Browse Markdown files grouped by detected document category such as README, docs, tutorials, specs, notes, todo, and more."
+                    ],
+                    "scope": "window",
+                    "markdownDescription": "Choose how the **Markdown Files** view is organized."
+                },
                 "markdownCompass.safeLinkSuppression.enabled": {
                     "type": "boolean",
                     "default": true,

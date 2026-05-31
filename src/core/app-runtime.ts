@@ -11,6 +11,88 @@ const previewRouting = require('../services/preview-routing');
 const { getSafePreviewRenderDebugState } = require('../services/markdown-safe-preview-plugin');
 const { getExtensionAssetPath } = require('../utils/extension-assets');
 
+const MARKDOWN_BROWSE_MODES = Object.freeze({
+    TREE: 'tree',
+    CATEGORY: 'category'
+});
+
+const FILE_TYPE_TO_BROWSE_CATEGORY_KEY = Object.freeze({
+    'readme-exact': 'readme',
+    readme: 'readme',
+    'changelog-exact': 'changelog',
+    changelog: 'changelog',
+    'history-exact': 'history',
+    history: 'history',
+    'license-exact': 'license',
+    license: 'license',
+    analysis: 'analysis',
+    docs: 'docs',
+    tutorial: 'tutorial',
+    api: 'api',
+    spec: 'spec',
+    test: 'test',
+    notes: 'notes',
+    todo: 'todo',
+    default: 'default'
+});
+
+const BROWSE_CATEGORY_METADATA = Object.freeze({
+    readme: { label: 'README', icon: 'readme.svg' },
+    changelog: { label: 'Changelog', icon: 'changelog.svg' },
+    history: { label: 'History', icon: 'history.svg' },
+    license: { label: 'License', icon: 'license.svg' },
+    analysis: { label: 'Analysis', icon: 'analysis.svg' },
+    docs: { label: 'Docs & Guides', icon: 'docs.svg' },
+    tutorial: { label: 'Tutorials', icon: 'tutorial.svg' },
+    api: { label: 'API & Reference', icon: 'api.svg' },
+    spec: { label: 'Specs & Requirements', icon: 'spec.svg' },
+    test: { label: 'Tests & Examples', icon: 'test.svg' },
+    notes: { label: 'Notes & Drafts', icon: 'notes.svg' },
+    todo: { label: 'Todo & Tasks', icon: 'todo.svg' },
+    default: { label: 'Other Markdown', icon: 'default.svg' }
+});
+
+const BROWSE_CATEGORY_ORDER = Object.freeze(Object.keys(BROWSE_CATEGORY_METADATA));
+
+function normalizeBrowseMode(mode) {
+    return mode === MARKDOWN_BROWSE_MODES.CATEGORY
+        ? MARKDOWN_BROWSE_MODES.CATEGORY
+        : MARKDOWN_BROWSE_MODES.TREE;
+}
+
+function getConfiguredBrowseMode() {
+    return normalizeBrowseMode(
+        vscode.workspace.getConfiguration('markdownCompass').get('browseMode')
+    );
+}
+
+function getBrowseCategoryKey(fileType) {
+    return FILE_TYPE_TO_BROWSE_CATEGORY_KEY[fileType] || 'default';
+}
+
+function getBrowseCategoryMetadata(categoryKey) {
+    return BROWSE_CATEGORY_METADATA[categoryKey] || BROWSE_CATEGORY_METADATA.default;
+}
+
+function getBrowseCategoryIconPath(categoryKey) {
+    return vscode.Uri.file(
+        getExtensionAssetPath('icons', 'bullets', getBrowseCategoryMetadata(categoryKey).icon)
+    );
+}
+
+function stripEmojiForTreeLabel(text) {
+    if (!text) {
+        return '';
+    }
+
+    return text
+        .replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?/gu, '')
+        .replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, '')
+        .replace(/[\u{1F3FB}-\u{1F3FF}\u200D\uFE0F\uFE0E\u20E3]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function serializePreviewRouteArg(arg) {
     if (arg && typeof arg === 'object' && typeof arg.toString === 'function' && Object.prototype.hasOwnProperty.call(arg, 'scheme')) {
         return arg.toString();
@@ -338,6 +420,7 @@ class MarkdownTreeDataProvider {
     constructor() {
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+        this._browseMode = getConfiguredBrowseMode();
         // Enable gitignore filtering by default
         this._useGitIgnore = true;
         // Cache for gitignore rules by workspace folder
@@ -359,6 +442,7 @@ class MarkdownTreeDataProvider {
         this._treeView = null;
         this._rootItemsCache = null;
         this._rootScanPromise = null;
+        this._categoryChildrenCache = new Map();
         this._initialExpandedRootDirectories = new Set();
         this._rootScanLoadingFrames = ['.', '..', '...'];
         this._rootScanLoadingFrameIndex = 0;
@@ -368,10 +452,53 @@ class MarkdownTreeDataProvider {
 
     attachTreeView(treeView) {
         this._treeView = treeView;
+        this._syncTreeViewPresentation();
 
         if (this._rootScanPromise) {
             this._ensureRootScanLoadingVisible();
         }
+    }
+
+    _syncTreeViewPresentation() {
+        if (!this._treeView) {
+            return;
+        }
+
+        this._treeView.description = this.isCategoryBrowseMode()
+            ? 'By category'
+            : 'By tree';
+    }
+
+    getBrowseMode() {
+        return this._browseMode;
+    }
+
+    isCategoryBrowseMode() {
+        return this._browseMode === MARKDOWN_BROWSE_MODES.CATEGORY;
+    }
+
+    setBrowseMode(mode, options = {}) {
+        const normalizedMode = normalizeBrowseMode(mode);
+        const modeChanged = this._browseMode !== normalizedMode;
+        this._browseMode = normalizedMode;
+        this._syncTreeViewPresentation();
+
+        if (!modeChanged) {
+            return false;
+        }
+
+        this.refresh();
+
+        if (options.showMessage !== false) {
+            const browseModeLabel = this.isCategoryBrowseMode() ? 'Category' : 'Tree';
+            vscode.window.showInformationMessage(`Markdown browse mode: ${browseModeLabel}`);
+        }
+
+        return true;
+    }
+
+    syncBrowseModeFromConfiguration() {
+        return this.setBrowseMode(getConfiguredBrowseMode(), { showMessage: false });
     }
 
     _setTreeViewMessage(message) {
@@ -384,7 +511,10 @@ class MarkdownTreeDataProvider {
 
     _renderRootScanLoadingMessage() {
         const suffix = this._rootScanLoadingFrames[this._rootScanLoadingFrameIndex];
-        this._setTreeViewMessage(`Scanning workspace for Markdown documents${suffix}`);
+        const scanLabel = this.isCategoryBrowseMode()
+            ? 'Scanning workspace for categorized Markdown documents'
+            : 'Scanning workspace for Markdown documents';
+        this._setTreeViewMessage(`${scanLabel}${suffix}`);
     }
 
     _ensureRootScanLoadingVisible() {
@@ -455,25 +585,9 @@ class MarkdownTreeDataProvider {
                 return;
             }
 
-            const rootItems = [];
-            for (const folder of workspaceFolders) {
-                if (await this._containsMarkdownFiles(folder.uri)) {
-                    const folderNode = new MarkdownNode(folder.name, folder.uri, 'directory');
-
-                    const shouldAutoExpand = await this._shouldAutoExpand(folder.uri);
-                    folderNode.collapsibleState = shouldAutoExpand
-                        ? vscode.TreeItemCollapsibleState.Expanded
-                        : vscode.TreeItemCollapsibleState.Collapsed;
-
-                    rootItems.push(folderNode);
-                }
-            }
-
-            if (!this._searchQuery && rootItems.length > 0) {
-                rootItems[0].collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
-            }
-
-            this._rootItemsCache = rootItems;
+            this._rootItemsCache = this.isCategoryBrowseMode()
+                ? await this._buildCategoryRootItems(workspaceFolders)
+                : await this._buildDirectoryRootItems(workspaceFolders);
             this._isInitialLoad = false;
         })();
 
@@ -484,6 +598,56 @@ class MarkdownTreeDataProvider {
             this._endRootScanLoading(scanToken);
             this._onDidChangeTreeData.fire();
         }
+    }
+
+    async _buildDirectoryRootItems(workspaceFolders) {
+        const rootItems = [];
+        for (const folder of workspaceFolders) {
+            if (await this._containsMarkdownFiles(folder.uri)) {
+                const folderNode = new MarkdownNode(folder.name, folder.uri, 'directory');
+
+                const shouldAutoExpand = await this._shouldAutoExpand(folder.uri);
+                folderNode.collapsibleState = shouldAutoExpand
+                    ? vscode.TreeItemCollapsibleState.Expanded
+                    : vscode.TreeItemCollapsibleState.Collapsed;
+
+                rootItems.push(folderNode);
+            }
+        }
+
+        if (!this._searchQuery && rootItems.length > 0) {
+            rootItems[0].collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+        }
+
+        return rootItems;
+    }
+
+    async _buildCategoryRootItems(workspaceFolders) {
+        this._categoryChildrenCache.clear();
+
+        const categorizedFiles = new Map();
+        for (const folder of workspaceFolders) {
+            await this._collectCategorizedMarkdownFiles(folder.uri, categorizedFiles);
+        }
+
+        const rootItems = [];
+        for (const categoryKey of BROWSE_CATEGORY_ORDER) {
+            const items = categorizedFiles.get(categoryKey);
+            if (!items || items.length === 0) {
+                continue;
+            }
+
+            items.sort((a, b) => {
+                const left = (a.relativePath || a.label).toLowerCase();
+                const right = (b.relativePath || b.label).toLowerCase();
+                return left.localeCompare(right);
+            });
+
+            this._categoryChildrenCache.set(categoryKey, items);
+            rootItems.push(this._createCategoryNode(categoryKey, items.length));
+        }
+
+        return rootItems;
     }
 
     /**
@@ -500,6 +664,7 @@ class MarkdownTreeDataProvider {
         this._headerCache.clear();
         // Clear search results cache
         this._searchResults.clear();
+        this._categoryChildrenCache.clear();
 
         if (clearRootCache) {
             this._rootItemsCache = null;
@@ -540,7 +705,7 @@ class MarkdownTreeDataProvider {
         this._searchQuery = query || '';
         this.refresh({
             resetInitialLoad: false,
-            clearRootCache: false
+            clearRootCache: this.isCategoryBrowseMode()
         });
     }
 
@@ -553,7 +718,7 @@ class MarkdownTreeDataProvider {
         this._searchResults.clear();
         this.refresh({
             resetInitialLoad: false,
-            clearRootCache: false
+            clearRootCache: this.isCategoryBrowseMode()
         });
     }
 
@@ -599,8 +764,11 @@ class MarkdownTreeDataProvider {
             return cachedResult.matches;
         }
 
-        // Perform fuzzy search on file/directory name
-        const nameMatch = FuzzySearchUtils.multiTermSearch(this._searchQuery, item.label);
+        // Perform fuzzy search on the visible name and, when available, the relative path.
+        const searchableText = item.relativePath && item.relativePath !== item.label
+            ? `${item.label} ${item.relativePath}`
+            : item.label;
+        const nameMatch = FuzzySearchUtils.multiTermSearch(this._searchQuery, searchableText);
         let totalScore = nameMatch ? nameMatch.score : 0;
         let allHighlights = nameMatch ? nameMatch.highlights : [];
         let headerMatches = [];
@@ -770,6 +938,141 @@ class MarkdownTreeDataProvider {
         this._useGitIgnore = !this._useGitIgnore;
         vscode.window.showInformationMessage(`GitIgnore filtering is now ${this._useGitIgnore ? 'enabled' : 'disabled'}`);
         this.refresh();
+    }
+
+    async _ensureRootItemsLoaded() {
+        if (!this._rootItemsCache) {
+            await this._loadRootItems();
+        } else if (this._rootScanPromise) {
+            await this._rootScanPromise;
+        }
+
+        return this._rootItemsCache || [];
+    }
+
+    _getRelativeMarkdownPath(fileUri) {
+        const includeWorkspaceFolder = (vscode.workspace.workspaceFolders || []).length > 1;
+        return vscode.workspace.asRelativePath(fileUri, includeWorkspaceFolder);
+    }
+
+    _createCategoryNode(categoryKey, childCount) {
+        const metadata = getBrowseCategoryMetadata(categoryKey);
+        const categoryNode = new MarkdownNode(
+            metadata.label,
+            vscode.Uri.from({ scheme: 'markdown-compass-category', path: `/${categoryKey}` }),
+            'category'
+        );
+
+        categoryNode.categoryKey = categoryKey;
+        categoryNode.childCount = childCount;
+        categoryNode.collapsibleState = this._searchQuery
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.Collapsed;
+
+        return categoryNode;
+    }
+
+    async _createMarkdownFileNode(fileUri, name, options = {}) {
+        const fileNode = new MarkdownNode(name, fileUri, 'file');
+        fileNode.relativePath = options.relativePath || this._getRelativeMarkdownPath(fileUri);
+        fileNode.workspaceFolderName = options.workspaceFolderName || this._getWorkspaceFolder(fileUri)?.name || null;
+
+        if (options.parentCategoryKey) {
+            fileNode.parentCategoryKey = options.parentCategoryKey;
+        }
+
+        try {
+            const content = await vscode.workspace.fs.readFile(fileUri);
+            const text = Buffer.from(content).toString('utf8');
+            const firstHeader = this._extractFirstLevelHeader(text);
+            if (firstHeader) {
+                fileNode.setFirstLevelHeader(firstHeader);
+            }
+
+            const stats = await vscode.workspace.fs.stat(fileUri);
+            const wordCount = text.split(/\s+/).length;
+            const readingTime = Math.max(1, Math.ceil(wordCount / 200));
+            fileNode.setMetadata({
+                size: stats.size,
+                lastModified: new Date(stats.mtime),
+                readingTime
+            });
+        } catch (error) {
+            console.warn(`Could not read file ${fileUri.fsPath} for header extraction:`, error);
+        }
+
+        const matchesSearch = await this._matchesSearch(fileNode);
+        return matchesSearch ? fileNode : null;
+    }
+
+    async _collectCategorizedMarkdownFiles(dirUri, categorizedFiles) {
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(dirUri);
+            const workspaceFolder = this._getWorkspaceFolder(dirUri);
+            const gitIgnoreRules = await this.getGitIgnoreRules(workspaceFolder ? workspaceFolder.uri : null);
+
+            for (const [name, type] of entries) {
+                const childUri = vscode.Uri.joinPath(dirUri, name);
+                const relativePath = vscode.workspace.asRelativePath(childUri);
+
+                if (gitIgnoreRules && gitIgnoreRules.ignores(relativePath)) {
+                    continue;
+                }
+
+                if (type === vscode.FileType.File && name.toLowerCase().endsWith('.md')) {
+                    const fileNode = await this._createMarkdownFileNode(childUri, name, {
+                        relativePath: this._getRelativeMarkdownPath(childUri),
+                        workspaceFolderName: workspaceFolder?.name || null
+                    });
+                    if (!fileNode) {
+                        continue;
+                    }
+
+                    const categoryKey = getBrowseCategoryKey(fileNode.fileType);
+                    fileNode.parentCategoryKey = categoryKey;
+
+                    if (!categorizedFiles.has(categoryKey)) {
+                        categorizedFiles.set(categoryKey, []);
+                    }
+
+                    categorizedFiles.get(categoryKey).push(fileNode);
+                } else if (type === vscode.FileType.Directory) {
+                    await this._collectCategorizedMarkdownFiles(childUri, categorizedFiles);
+                }
+            }
+        } catch (error) {
+            console.error(`Error reading directory ${dirUri.fsPath} for categorized browse mode:`, error);
+        }
+    }
+
+    async getSerializedTreeSnapshot(maxDepth = 1) {
+        const depth = Number.isFinite(maxDepth)
+            ? Math.max(0, Math.min(maxDepth, 2))
+            : 1;
+        const rootItems = await this._ensureRootItemsLoaded();
+
+        const serializeNode = async (node, remainingDepth) => {
+            const snapshot = {
+                label: node.label,
+                type: node.type,
+                categoryKey: node.categoryKey || null,
+                fileType: node.fileType || null,
+                childCount: node.childCount || 0,
+                relativePath: node.relativePath || null,
+                firstLevelHeader: node.firstLevelHeader || null
+            };
+
+            if (remainingDepth > 0 && (node.type === 'directory' || node.type === 'category')) {
+                const children = await this.getChildren(node);
+                snapshot.children = await Promise.all(
+                    children.map(child => serializeNode(child, remainingDepth - 1))
+                );
+            }
+
+            return snapshot;
+        };
+
+        return Promise.all(rootItems.map(item => serializeNode(item, depth)));
     }
 
     /**
@@ -980,12 +1283,15 @@ class MarkdownTreeDataProvider {
      * @returns {vscode.TreeItem}
      */    getTreeItem(element) {
         // Create the basic tree item structure
-        let displayLabel
+        let displayLabel = element.label;
+        let isUsingSanitizedHeadingLabel = false;
 
         // For markdown files with first level headers, show header text above filename
         if (element.type === 'file' && element.isMarkdownFile && element.firstLevelHeader) {
-            // Use the header text as the main label and filename as description
-            displayLabel = element.firstLevelHeader;
+            // Strip emoji from rendered tree labels while preserving the original heading elsewhere.
+            const sanitizedHeadingLabel = stripEmojiForTreeLabel(element.firstLevelHeader);
+            displayLabel = sanitizedHeadingLabel || element.label;
+            isUsingSanitizedHeadingLabel = sanitizedHeadingLabel.length > 0 && displayLabel !== element.label;
         }
 
         const treeItem = new vscode.TreeItem(displayLabel, element.collapsibleState);
@@ -1027,8 +1333,11 @@ class MarkdownTreeDataProvider {
             let description = '';
 
             // If we have a first level header, show the filename as description
-            if (element.firstLevelHeader) {
+            if (isUsingSanitizedHeadingLabel) {
                 description = element.label;
+                if (this.isCategoryBrowseMode() && element.relativePath) {
+                    description = element.relativePath;
+                }
             } else if (this._searchQuery && element.searchScore > 0) {
                 // Search result information
                 if (element.headerMatches?.length > 0) {
@@ -1043,7 +1352,20 @@ class MarkdownTreeDataProvider {
                 description = `${element.readingTime}min read`;
             }
 
+            if (this.isCategoryBrowseMode() && element.relativePath && description === `${element.readingTime}min read`) {
+                description = element.relativePath;
+            } else if (this.isCategoryBrowseMode() && element.relativePath && !description) {
+                description = element.relativePath === element.label
+                    ? (element.workspaceFolderName || '')
+                    : element.relativePath;
+            }
+
             treeItem.description = description;
+        } else if (element.type === 'category') {
+            treeItem.iconPath = getBrowseCategoryIconPath(element.categoryKey);
+            treeItem.contextValue = 'markdownCategory';
+            treeItem.description = `${element.childCount} file${element.childCount === 1 ? '' : 's'}`;
+            treeItem.tooltip = `${element.label}\n${element.childCount} Markdown file${element.childCount === 1 ? '' : 's'}`;
         } else if (element.type === 'file') {
             // Non-markdown file - should not happen with our filter
             treeItem.iconPath = new vscode.ThemeIcon('file');
@@ -1071,11 +1393,11 @@ class MarkdownTreeDataProvider {
      * @returns {boolean} True if directory is expanded
      */
     _isDirectoryExpanded(element) {
-        if (!element || element.type !== 'directory') {
+        if (!element || (element.type !== 'directory' && element.type !== 'category')) {
             return false;
         }
 
-        // Check if this directory is in our expanded set
+        // Check if this container is in our expanded set
         const dirKey = element.uri.toString();
         return this._expandedDirectories.has(dirKey);
     }
@@ -1085,10 +1407,10 @@ class MarkdownTreeDataProvider {
      * @param {MarkdownNode} element The expanded element
      */
     _onTreeItemExpanded(element) {
-        if (element && element.type === 'directory') {
+        if (element && (element.type === 'directory' || element.type === 'category')) {
             const dirKey = element.uri.toString();
             this._expandedDirectories.add(dirKey);
-            console.log(`Directory expanded: ${element.label}`);
+            console.log(`Tree item expanded: ${element.label}`);
 
             // Refresh the tree item to update the icon
             this._onDidChangeTreeData.fire(element);
@@ -1100,10 +1422,10 @@ class MarkdownTreeDataProvider {
      * @param {MarkdownNode} element The collapsed element
      */
     _onTreeItemCollapsed(element) {
-        if (element && element.type === 'directory') {
+        if (element && (element.type === 'directory' || element.type === 'category')) {
             const dirKey = element.uri.toString();
             this._expandedDirectories.delete(dirKey);
-            console.log(`Directory collapsed: ${element.label}`);
+            console.log(`Tree item collapsed: ${element.label}`);
 
             // Refresh the tree item to update the icon
             this._onDidChangeTreeData.fire(element);
@@ -1168,6 +1490,15 @@ class MarkdownTreeDataProvider {
         }
 
         try {
+            if (element.type === 'category') {
+                return null;
+            }
+
+            if (this.isCategoryBrowseMode() && element.type === 'file' && element.parentCategoryKey) {
+                const siblings = this._categoryChildrenCache.get(element.parentCategoryKey) || [];
+                return this._createCategoryNode(element.parentCategoryKey, siblings.length);
+            }
+
             const elementPath = element.uri.fsPath;
 
             // If this is a workspace folder (root level), it has no parent
@@ -1237,7 +1568,7 @@ class MarkdownTreeDataProvider {
             }
 
             // Find the item by searching through the tree
-            const findItem = async (items, depth = 0, parentPath = '') => {
+            const findItem = async (items, depth = 0, parentPath = '', ancestors = []) => {
                 if (!items || items.length === 0) {
                     console.log(`  Depth ${depth}: No items to search in ${parentPath || 'root'}`);
                     return null;
@@ -1251,19 +1582,25 @@ class MarkdownTreeDataProvider {
 
                     if (item.uri && item.uri.fsPath === targetPath) {
                         console.log(`  ✓ FOUND matching tree item: ${item.label} at depth ${depth}`);
-                        return item;
+                        return { item, ancestors };
                     }
 
-                    // If target path starts with this directory path, search its children
-                    if (item.type === 'directory' && targetPath.startsWith(itemPath + path.sep)) {
-                        console.log(`  Depth ${depth}: Target may be in directory "${item.label}" - expanding...`);
+                    const shouldSearchChildren =
+                        item.type === 'category' ||
+                        (item.type === 'directory' && targetPath.startsWith(itemPath + path.sep));
+
+                    if (shouldSearchChildren) {
+                        const expansionLabel = item.type === 'category'
+                            ? `Target may be in category "${item.label}" - expanding...`
+                            : `Target may be in directory "${item.label}" - expanding...`;
+                        console.log(`  Depth ${depth}: ${expansionLabel}`);
                         try {
                             const children = await this.getChildren(item);
                             if (children && children.length > 0) {
-                                const found = await findItem(children, depth + 1, itemPath);
+                                const found = await findItem(children, depth + 1, itemPath, [...ancestors, item]);
                                 if (found) return found;
                             } else {
-                                console.log(`  Depth ${depth}: Directory "${item.label}" has no children`);
+                                console.log(`  Depth ${depth}: "${item.label}" has no children`);
                             }
                         } catch (childError) {
                             console.error(`  Error getting children for ${item.label}:`, childError);
@@ -1275,7 +1612,7 @@ class MarkdownTreeDataProvider {
 
             // Start search from root
             console.log('Starting search from root level...');
-            const rootItems = await this.getChildren(undefined);
+            const rootItems = await this._ensureRootItemsLoaded();
             console.log(`Root items: ${rootItems ? rootItems.length : 0}`);
 
             if (rootItems && rootItems.length > 0) {
@@ -1284,19 +1621,21 @@ class MarkdownTreeDataProvider {
                 }
             }
 
-            const foundItem = await findItem(rootItems);
+            const foundResult = await findItem(rootItems);
 
-            if (foundItem) {
+            if (foundResult) {
+                const { item: foundItem, ancestors } = foundResult;
                 console.log(`Attempting to reveal tree item: "${foundItem.label}"`);
                 try {
-                    // First try to expand parent directories if needed
-                    const parent = await this.getParent(foundItem);
-                    if (parent) {
-                        console.log(`Expanding parent directory: ${parent.label}`);
+                    for (const ancestor of ancestors) {
                         try {
-                            await treeView.reveal(parent, { expand: true });
-                        } catch (parentRevealError) {
-                            console.log('Could not expand parent:', parentRevealError.message);
+                            await treeView.reveal(ancestor, {
+                                expand: true,
+                                focus: false,
+                                select: false
+                            });
+                        } catch (ancestorRevealError) {
+                            console.log(`Could not expand ancestor "${ancestor.label}":`, ancestorRevealError.message);
                         }
                     }
 
@@ -1333,7 +1672,7 @@ class MarkdownTreeDataProvider {
                     if (!items) return;
                     for (const item of items) {
                         console.log(`${'  '.repeat(depth)}${item.label} (${item.type}) - ${item.uri?.fsPath}`);
-                        if (item.type === 'directory') {
+                        if (item.type === 'directory' || item.type === 'category') {
                             try {
                                 const children = await this.getChildren(item);
                                 if (children && children.length > 0) {
@@ -1382,6 +1721,10 @@ class MarkdownTreeDataProvider {
             return await this._getDirectoryContents(element.uri);
         }
 
+        if (element.type === 'category') {
+            return this._categoryChildrenCache.get(element.categoryKey) || [];
+        }
+
         // Files don't have children
         return [];
     }
@@ -1405,35 +1748,12 @@ class MarkdownTreeDataProvider {
                 // Apply .gitignore filtering
                 if (gitIgnoreRules && gitIgnoreRules.ignores(relativePath)) {
                     continue;
-                } if (type === vscode.FileType.File && name.toLowerCase().endsWith('.md')) {
+                }
+
+                if (type === vscode.FileType.File && name.toLowerCase().endsWith('.md')) {
                     // This is a markdown file
-                    const fileNode = new MarkdownNode(name, childUri, 'file');
-
-                    // Extract first level header and set metadata for enhanced display
-                    try {
-                        const content = await vscode.workspace.fs.readFile(childUri);
-                        const text = Buffer.from(content).toString('utf8');
-                        const firstHeader = this._extractFirstLevelHeader(text);
-                        if (firstHeader) {
-                            fileNode.setFirstLevelHeader(firstHeader);
-                        }
-
-                        // Calculate and set file metadata
-                        const stats = await vscode.workspace.fs.stat(childUri);
-                        const wordCount = text.split(/\s+/).length;
-                        const readingTime = Math.max(1, Math.ceil(wordCount / 200)); // Average 200 words per minute
-                        fileNode.setMetadata({
-                            size: stats.size,
-                            lastModified: new Date(stats.mtime),
-                            readingTime: readingTime
-                        });
-                    } catch (error) {
-                        // If we can't read the file, just continue without the header and metadata
-                        console.warn(`Could not read file ${childUri.fsPath} for header extraction:`, error);
-                    }
-
-                    // Apply search filtering
-                    if (await this._matchesSearch(fileNode)) {
+                    const fileNode = await this._createMarkdownFileNode(childUri, name);
+                    if (fileNode) {
                         items.push(fileNode);
                     }
                 } else if (type === vscode.FileType.Directory) {
@@ -2031,6 +2351,11 @@ function activate(context) {
                     console.log('Last markdown file closed - showing placeholder');
                 }
             }
+        }),
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration('markdownCompass.browseMode')) {
+                treeDataProvider.syncBrowseModeFromConfiguration();
+            }
         })
     );
 
@@ -2138,6 +2463,20 @@ function activate(context) {
             lastFavoriteRevealSucceeded: previewSyncDebugState.lastFavoriteRevealSucceeded
         })),
 
+        vscode.commands.registerCommand('markdown-compass.__test.setBrowseMode', (mode) => {
+            treeDataProvider.setBrowseMode(mode, { showMessage: false });
+            return treeDataProvider.getBrowseMode();
+        }),
+
+        vscode.commands.registerCommand('markdown-compass.__test.stripEmojiTreeLabel', (label) => {
+            return stripEmojiForTreeLabel(label);
+        }),
+
+        vscode.commands.registerCommand('markdown-compass.__test.getBrowseTreeSnapshot', async (request = {}) => ({
+            browseMode: treeDataProvider.getBrowseMode(),
+            rootItems: await treeDataProvider.getSerializedTreeSnapshot(request.depth ?? 1)
+        })),
+
         // Search in sidebar command
         vscode.commands.registerCommand('markdown-compass.searchInSidebar', async () => {
             const query = await vscode.window.showInputBox({
@@ -2156,6 +2495,23 @@ function activate(context) {
         vscode.commands.registerCommand('markdown-compass.clearSearch', () => {
             treeDataProvider.clearSearch();
             vscode.commands.executeCommand('setContext', 'markdown-compass:isSearchActive', false);
+        }),
+
+        vscode.commands.registerCommand('markdown-compass.toggleBrowseMode', async () => {
+            const nextMode = treeDataProvider.getBrowseMode() === MARKDOWN_BROWSE_MODES.CATEGORY
+                ? MARKDOWN_BROWSE_MODES.TREE
+                : MARKDOWN_BROWSE_MODES.CATEGORY;
+
+            await vscode.workspace.getConfiguration('markdownCompass').update(
+                'browseMode',
+                nextMode,
+                vscode.ConfigurationTarget.Global
+            );
+
+            treeDataProvider.setBrowseMode(nextMode, { showMessage: false });
+            vscode.window.showInformationMessage(
+                `Markdown browse mode: ${nextMode === MARKDOWN_BROWSE_MODES.CATEGORY ? 'Category' : 'Tree'}`
+            );
         }),
 
         // Toggle gitignore
